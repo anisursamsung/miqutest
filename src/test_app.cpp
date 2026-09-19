@@ -169,9 +169,24 @@ TestApp::TestApp(std::shared_ptr<AppEngine> engine)
 bool TestApp::init() {
     if (!m_engine) return false;
 
-    // Scan system users and desktop sessions
-    m_users = UserScanner::scan_users();
+    // Populate 20 placeholder users for testing GridView auto-fit
+    m_users.clear();
+    for (int i = 1; i <= 20; ++i) {
+        UserInfo u;
+        u.username = "user" + std::to_string(i);
+        u.display_name = "User " + std::to_string(i);
+        u.home_dir = "/home/user" + std::to_string(i);
+        u.uid = 1000 + i;
+        m_users.push_back(u);
+    }
+
     m_sessions = SessionScanner::scan_all();
+    if (m_sessions.empty()) {
+        SessionInfo s;
+        s.name = "miquland";
+        s.is_wayland = true;
+        m_sessions.push_back(s);
+    }
 
     setup_ui();
     return m_window != nullptr;
@@ -225,18 +240,11 @@ void TestApp::setup_ui() {
 
     root_frame->add_view(power_actions);
 
-    // 3. Centered Main Greeter Container
-    int user_count = static_cast<int>(m_users.size());
-    int grid_cols = std::min(5, std::max(1, user_count));
+    // 3. Centered Main Container
     int cell_w = 104;
     int cell_h = 116;
     int spacing = 12;
-
-    int grid_w = grid_cols * cell_w + (grid_cols - 1) * spacing;
-    int total_rows = (user_count + grid_cols - 1) / grid_cols;
-    int grid_h = total_rows * cell_h + (total_rows - 1) * spacing;
-
-    int center_box_w = std::max(340, grid_w);
+    int center_box_w = 580;
 
     auto greeter_center = std::make_shared<LinearLayout>(Orientation::Vertical);
     greeter_center->set_layout_params(LayoutParams(
@@ -263,23 +271,23 @@ void TestApp::setup_ui() {
         ->muted(true)
         ->textAlignment(TextAlignment::Center)
         ->build();
-    date_label->set_margin(0, 0, 0, 28);
+    date_label->set_margin(0, 0, 0, 20);
     greeter_center->add_view(date_label);
 
-    // GridView for User Selection (centered, fixed cell dimensions)
+    // GridView with autoFit using hardcoded cell_w and None stretch mode
     m_users_grid = GridViewBuilder::create()
-        ->numColumns(grid_cols)
+        ->autoFit(cell_w)
         ->cellSize(cell_w, cell_h)
         ->spacing(spacing, spacing)
         ->stretchMode(StretchMode::None)
         ->build();
 
     m_users_grid->set_layout_params(LayoutParams(
-        grid_w,
-        grid_h,
+        center_box_w,
+        256,
         Gravity::CenterHorizontal
     ));
-    m_users_grid->set_margin(0, 0, 0, 24);
+    m_users_grid->set_margin(0, 0, 0, 20);
 
     for (size_t i = 0; i < m_users.size(); ++i) {
         auto card = std::make_shared<UserCardView>(m_users[i], i == m_selected_user_idx);
