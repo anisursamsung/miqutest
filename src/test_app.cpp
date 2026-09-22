@@ -1,502 +1,524 @@
 #include "test_app.hpp"
-#include <xkbcommon/xkbcommon-keysyms.h>
-#include <pango/pangocairo.h>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
 #include <iostream>
-#include <unistd.h>
-#include <sys/types.h>
 
 using namespace miqu;
 
 namespace miqutest {
 
-class UserCardView : public View {
-public:
-    UserCardView(UserInfo user, bool is_selected = false)
-        : m_user(std::move(user)), m_is_selected(is_selected) {}
-
-    void set_selected(bool selected) {
-        if (m_is_selected != selected) {
-            m_is_selected = selected;
-            request_redraw();
-        }
-    }
-
-    Size measure_size() const override {
-        return Size(104, 116);
-    }
-
-    void draw(cairo_t* cr, const Rect& bounds) override {
-        if (!cr || bounds.width <= 0 || bounds.height <= 0) return;
-
-        auto config = Config::get();
-        cairo_save(cr);
-
-        int pad = 2;
-        int card_x = bounds.x + pad;
-        int card_y = bounds.y + pad;
-        int card_w = bounds.width - (2 * pad);
-        int card_h = bounds.height - (2 * pad);
-        double card_radius = 12.0;
-
-        // 1. Draw Card Background & Selection Highlight
-        CardView::draw_rounded_rect(cr, card_x, card_y, card_w, card_h, card_radius);
-        if (m_is_selected) {
-            cairo_set_source_rgba(cr, config->colors.primary.r,
-                                      config->colors.primary.g,
-                                      config->colors.primary.b,
-                                      0.16f);
-            cairo_fill_preserve(cr);
-
-            cairo_set_source_rgba(cr, config->colors.primary.r,
-                                      config->colors.primary.g,
-                                      config->colors.primary.b,
-                                      0.85f);
-            cairo_set_line_width(cr, 1.6);
-            cairo_stroke(cr);
-        } else {
-            cairo_set_source_rgba(cr, config->colors.surface_variant.r,
-                                      config->colors.surface_variant.g,
-                                      config->colors.surface_variant.b,
-                                      0.25f);
-            cairo_fill_preserve(cr);
-
-            cairo_set_source_rgba(cr, config->colors.outline_variant.r,
-                                      config->colors.outline_variant.g,
-                                      config->colors.outline_variant.b,
-                                      0.30f);
-            cairo_set_line_width(cr, 1.0);
-            cairo_stroke(cr);
-        }
-
-        // 2. Avatar Circle
-        int avatar_size = 50;
-        int avatar_x = card_x + (card_w - avatar_size) / 2;
-        int avatar_y = card_y + 12;
-
-        cairo_save(cr);
-        cairo_arc(cr, avatar_x + avatar_size / 2.0, avatar_y + avatar_size / 2.0, avatar_size / 2.0, 0, 2 * M_PI);
-        if (m_is_selected) {
-            cairo_set_source_rgba(cr, config->colors.primary.r, config->colors.primary.g, config->colors.primary.b, 0.95f);
-        } else {
-            cairo_set_source_rgba(cr, config->colors.surface_variant.r, config->colors.surface_variant.g, config->colors.surface_variant.b, 0.85f);
-        }
-        cairo_fill_preserve(cr);
-
-        cairo_set_source_rgba(cr, config->colors.outline.r, config->colors.outline.g, config->colors.outline.b, 0.35f);
-        cairo_set_line_width(cr, 1.2);
-        cairo_stroke(cr);
-        cairo_restore(cr);
-
-        // 3. Avatar Initial Letter
-        std::string initial = m_user.display_name.empty() ? "?" : m_user.display_name.substr(0, 1);
-        if (initial >= "a" && initial <= "z") initial[0] = toupper(initial[0]);
-
-        PangoLayout* initial_layout = pango_cairo_create_layout(cr);
-        pango_layout_set_text(initial_layout, initial.c_str(), -1);
-
-        std::string font_family = config->metrics.font_family.empty() ? "Sans" : config->metrics.font_family;
-        std::string init_font = font_family + " Bold 18";
-        PangoFontDescription* idesc = pango_font_description_from_string(init_font.c_str());
-        pango_layout_set_font_description(initial_layout, idesc);
-        pango_font_description_free(idesc);
-
-        int init_w = 0, init_h = 0;
-        pango_layout_get_pixel_size(initial_layout, &init_w, &init_h);
-        int init_x = avatar_x + (avatar_size - init_w) / 2;
-        int init_y = avatar_y + (avatar_size - init_h) / 2;
-
-        cairo_move_to(cr, init_x, init_y);
-        if (m_is_selected) {
-            cairo_set_source_rgba(cr, config->colors.on_primary.r, config->colors.on_primary.g, config->colors.on_primary.b, 1.0f);
-        } else {
-            cairo_set_source_rgba(cr, config->colors.primary.r, config->colors.primary.g, config->colors.primary.b, 1.0f);
-        }
-        pango_cairo_show_layout(cr, initial_layout);
-        g_object_unref(initial_layout);
-
-        // 4. User Display Name (Centered)
-        PangoLayout* name_layout = pango_cairo_create_layout(cr);
-        pango_layout_set_text(name_layout, m_user.display_name.c_str(), -1);
-        std::string name_font = font_family + (m_is_selected ? " Bold 11" : " 11");
-        PangoFontDescription* ndesc = pango_font_description_from_string(name_font.c_str());
-        pango_layout_set_font_description(name_layout, ndesc);
-        pango_font_description_free(ndesc);
-
-        int text_area_w = card_w - 8;
-        pango_layout_set_width(name_layout, text_area_w * PANGO_SCALE);
-        pango_layout_set_ellipsize(name_layout, PANGO_ELLIPSIZE_END);
-        pango_layout_set_alignment(name_layout, PANGO_ALIGN_CENTER);
-
-        int name_y = avatar_y + avatar_size + 10;
-        cairo_move_to(cr, card_x + 4, name_y);
-        cairo_set_source_rgba(cr, config->colors.on_surface.r, config->colors.on_surface.g, config->colors.on_surface.b, 1.0f);
-        pango_cairo_show_layout(cr, name_layout);
-        g_object_unref(name_layout);
-
-        cairo_restore(cr);
-    }
-
-    const UserInfo& get_user() const { return m_user; }
-
-private:
-    UserInfo m_user;
-    bool m_is_selected = false;
-};
-
-static std::string get_current_time_str() {
-    std::time_t now = std::time(nullptr);
-    std::tm* tm = std::localtime(&now);
-    char buf[64];
-    std::strftime(buf, sizeof(buf), "%H:%M", tm);
-    return buf;
-}
-
-static std::string get_current_date_str() {
-    std::time_t now = std::time(nullptr);
-    std::tm* tm = std::localtime(&now);
-    char buf[128];
-    std::strftime(buf, sizeof(buf), "%A, %B %d", tm);
-    return buf;
-}
-
 TestApp::TestApp(std::shared_ptr<AppEngine> engine)
-    : m_engine(std::move(engine)) {
-}
+    : m_engine(std::move(engine)) {}
 
 bool TestApp::init() {
     if (!m_engine) return false;
-
-    // Populate 20 placeholder users for testing GridView auto-fit
-    m_users.clear();
-    for (int i = 1; i <= 20; ++i) {
-        UserInfo u;
-        u.username = "user" + std::to_string(i);
-        u.display_name = "User " + std::to_string(i);
-        u.home_dir = "/home/user" + std::to_string(i);
-        u.uid = 1000 + i;
-        m_users.push_back(u);
-    }
-
-    m_sessions = SessionScanner::scan_all();
-    if (m_sessions.empty()) {
-        SessionInfo s;
-        s.name = "miquland";
-        s.is_wayland = true;
-        m_sessions.push_back(s);
-    }
-
     setup_ui();
     return m_window != nullptr;
 }
 
+int TestApp::run() {
+    if (!m_engine) return 1;
+    return m_engine->enter_loop();
+}
+
+void TestApp::log_activity(const std::string& msg) {
+    std::time_t now = std::time(nullptr);
+    std::tm* tm = std::localtime(&now);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%H:%M:%S", tm);
+
+    std::string line = "[" + std::string(buf) + "] " + msg;
+    std::cout << line << std::endl;
+
+    if (m_status_text) {
+        m_status_text->set_text(line);
+    }
+    if (m_window) {
+        m_window->schedule_redraw();
+    }
+}
+
 void TestApp::setup_ui() {
-    // 1. Root FrameLayout for layering power controls & centered greeter
-    auto root_frame = std::make_shared<FrameLayout>();
-    root_frame->set_layout_params(LayoutParams(
+    // 1. Root Vertical Container
+    auto root = std::make_shared<LinearLayout>(Orientation::Vertical);
+    root->set_layout_params(LayoutParams(
         static_cast<int>(LayoutDimension::MatchParent),
         static_cast<int>(LayoutDimension::MatchParent)
     ));
+    root->set_padding(24, 20);
+    root->set_divider_spacing(18);
 
-    // 2. Power Actions Bar (Top-Right)
-    auto power_actions = std::make_shared<LinearLayout>(Orientation::Horizontal);
-    power_actions->set_layout_params(LayoutParams(
-        static_cast<int>(LayoutDimension::WrapContent),
-        static_cast<int>(LayoutDimension::WrapContent),
-        Gravity::Right | Gravity::Top
-    ));
-    power_actions->set_margin(0, 16, 20, 0);
-
-    auto sleep_btn = ButtonBuilder::create()
-        ->text("💤")
-        ->flat(true)
-        ->padding(10, 6)
-        ->textSize(14)
-        ->onClick([this]() { handle_power_action("Suspend"); })
-        ->build();
-    sleep_btn->set_margin(0, 0, 4, 0);
-    power_actions->add_view(sleep_btn);
-
-    auto reboot_btn = ButtonBuilder::create()
-        ->text("🔄")
-        ->flat(true)
-        ->padding(10, 6)
-        ->textSize(14)
-        ->onClick([this]() { handle_power_action("Reboot"); })
-        ->build();
-    reboot_btn->set_margin(0, 0, 4, 0);
-    power_actions->add_view(reboot_btn);
-
-    auto shutdown_btn = ButtonBuilder::create()
-        ->text("⏻")
-        ->flat(true)
-        ->padding(10, 6)
-        ->textSize(14)
-        ->onClick([this]() { handle_power_action("PowerOff"); })
-        ->build();
-    power_actions->add_view(shutdown_btn);
-
-    root_frame->add_view(power_actions);
-
-    // 3. Centered Main Container
-    int cell_w = 104;
-    int cell_h = 116;
-    int spacing = 12;
-    int center_box_w = 580;
-
-    auto greeter_center = std::make_shared<LinearLayout>(Orientation::Vertical);
-    greeter_center->set_layout_params(LayoutParams(
-        center_box_w,
-        static_cast<int>(LayoutDimension::WrapContent),
-        Gravity::Center
-    ));
-    greeter_center->set_gravity(Gravity::CenterHorizontal);
-
-    // Clock
-    auto clock_label = TextViewBuilder::create()
-        ->text(get_current_time_str())
-        ->textSize(52)
-        ->bold(true)
-        ->textAlignment(TextAlignment::Center)
-        ->build();
-    clock_label->set_margin(0, 0, 0, 2);
-    greeter_center->add_view(clock_label);
-
-    // Date
-    auto date_label = TextViewBuilder::create()
-        ->text(get_current_date_str())
-        ->textSize(13)
-        ->muted(true)
-        ->textAlignment(TextAlignment::Center)
-        ->build();
-    date_label->set_margin(0, 0, 0, 20);
-    greeter_center->add_view(date_label);
-
-    // GridView with autoFit using hardcoded cell_w and None stretch mode
-    m_users_grid = GridViewBuilder::create()
-        ->autoFit(cell_w)
-        ->cellSize(cell_w, cell_h)
-        ->spacing(spacing, spacing)
-        ->stretchMode(StretchMode::None)
-        ->build();
-
-    m_users_grid->set_layout_params(LayoutParams(
-        center_box_w,
-        256,
-        Gravity::CenterHorizontal
-    ));
-    m_users_grid->set_margin(0, 0, 0, 20);
-
-    for (size_t i = 0; i < m_users.size(); ++i) {
-        auto card = std::make_shared<UserCardView>(m_users[i], i == m_selected_user_idx);
-        m_users_grid->add_item(card);
-    }
-
-    m_users_grid->set_selected_index(static_cast<int>(m_selected_user_idx));
-    m_users_grid->set_on_item_click_listener([this](size_t idx, std::shared_ptr<View>) {
-        select_user(idx);
-    });
-
-    greeter_center->add_view(m_users_grid);
-
-    // Auth Form Container (Compact 300px width)
-    int form_w = 300;
-    auto auth_form = std::make_shared<LinearLayout>(Orientation::Vertical);
-    auth_form->set_layout_params(LayoutParams(
-        form_w,
-        static_cast<int>(LayoutDimension::WrapContent),
-        Gravity::CenterHorizontal
-    ));
-
-    // Password Input
-    m_password_input = EditTextBuilder::create()
-        ->hint("Password")
-        ->passwordMode(true)
-        ->focused(true)
-        ->padding(14, 11)
-        ->onSubmit([this](const std::string&) { attempt_login(); })
-        ->build();
-    m_password_input->set_layout_params(LayoutParams(
-        form_w,
+    // =========================================================================
+    // 2. Header Bar (Title + Subtitle + 3-Dot Overflow Menu)
+    // =========================================================================
+    auto header = std::make_shared<LinearLayout>(Orientation::Horizontal);
+    header->set_layout_params(LayoutParams(
+        static_cast<int>(LayoutDimension::MatchParent),
         static_cast<int>(LayoutDimension::WrapContent)
     ));
-    m_password_input->set_margin(0, 0, 0, 10);
-    auth_form->add_view(m_password_input);
+    header->set_gravity(Gravity::CenterVertical);
 
-    // Session Dropdown (Spinner)
-    std::vector<std::string> session_names;
-    for (const auto& s : m_sessions) {
-        session_names.push_back(s.name + (s.is_wayland ? " (Wayland)" : " (X11)"));
-    }
+    auto title_col = std::make_shared<LinearLayout>(Orientation::Vertical);
+    LayoutParams title_params(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    );
+    title_params.weight = 1.0f;
+    title_col->set_layout_params(title_params);
 
-    m_session_spinner = SpinnerBuilder::create()
-        ->items(session_names)
-        ->selectedIndex(m_selected_session_idx)
-        ->padding(14, 11)
-        ->onItemSelected([this](int idx, const std::string&) {
-            select_session(idx);
+    auto title = TextViewBuilder::create()
+        ->text("Action Menu & Popup Showcase")
+        ->textSize(18)
+        ->bold(true)
+        ->build();
+    title_col->add_view(title);
+
+    auto subtitle = TextViewBuilder::create()
+        ->text("Interactive testing for 3-dot menus, checkables, radios, and gravities")
+        ->textSize(12)
+        ->muted(true)
+        ->build();
+    title_col->add_view(subtitle);
+    header->add_view(title_col);
+
+    // Header 3-Dot Overflow Button
+    auto header_dots_btn = std::make_shared<ImageButton>("view-more-symbolic");
+    header_dots_btn->set_circle(true);
+    header_dots_btn->set_icon_size(18);
+    header_dots_btn->set_padding(8);
+    header_dots_btn->set_layout_params(LayoutParams(
+        static_cast<int>(LayoutDimension::WrapContent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    ));
+
+    // Build Header Overflow Menu
+    m_header_menu = PopupMenuBuilder::create()
+        ->section("Application")
+        ->item("Preferences", "preferences-system-symbolic", "Ctrl+,", [this]() {
+            log_activity("Header: 'Preferences' triggered");
         })
-        ->build();
-    m_session_spinner->set_layout_params(LayoutParams(
-        form_w,
-        static_cast<int>(LayoutDimension::WrapContent)
-    ));
-    m_session_spinner->set_margin(0, 0, 0, 14);
-    auth_form->add_view(m_session_spinner);
-
-    // Sign In Button
-    m_login_btn = ButtonBuilder::create()
-        ->text("Sign In")
-        ->primary(true)
-        ->cornerRadius(8)
-        ->padding(16, 11)
-        ->bold(true)
-        ->onClick([this]() { attempt_login(); })
-        ->build();
-    m_login_btn->set_layout_params(LayoutParams(
-        form_w,
-        static_cast<int>(LayoutDimension::WrapContent)
-    ));
-    m_login_btn->set_margin(0, 0, 0, 10);
-    auth_form->add_view(m_login_btn);
-
-    // Minimal Status Label (Empty by default)
-    m_status_label = TextViewBuilder::create()
-        ->text("")
-        ->textSize(11)
-        ->muted(true)
-        ->textAlignment(TextAlignment::Center)
-        ->build();
-    m_status_label->set_layout_params(LayoutParams(
-        form_w,
-        static_cast<int>(LayoutDimension::WrapContent)
-    ));
-    auth_form->add_view(m_status_label);
-
-    greeter_center->add_view(auth_form);
-    root_frame->add_view(greeter_center);
-
-    // 4. Create Window
-    m_window = WindowBuilder::create()
-        ->title("miqudm - Greeter")
-        ->appId("miqudm")
-        ->role(WindowRole::Toplevel)
-        ->preferredSize(680, 680)
-        ->closeOnEscape(true)
-        ->contentView(root_frame)
-        ->onClose([this]() {
+        ->item("Keyboard Shortcuts", "input-keyboard-symbolic", [this]() {
+            log_activity("Header: 'Keyboard Shortcuts' triggered");
+        })
+        ->separator()
+        ->section("View Options")
+        ->checkable("Dark Theme Preview", true, [this](bool checked) {
+            log_activity(std::string("Header: 'Dark Theme' toggled -> ") + (checked ? "ON" : "OFF"));
+        })
+        ->checkable("Show Grid Overlay", false, [this](bool checked) {
+            log_activity(std::string("Header: 'Grid Overlay' toggled -> ") + (checked ? "ON" : "OFF"));
+        })
+        ->separator()
+        ->section("Density")
+        ->radio("Compact", 1, false, [this](bool checked) {
+            if (checked) log_activity("Header: Density set to Compact");
+        })
+        ->radio("Normal", 1, true, [this](bool checked) {
+            if (checked) log_activity("Header: Density set to Normal");
+        })
+        ->radio("Comfortable", 1, false, [this](bool checked) {
+            if (checked) log_activity("Header: Density set to Comfortable");
+        })
+        ->separator()
+        ->destructive("Purge Cache", "user-trash-symbolic", [this]() {
+            log_activity("Header Destructive: 'Purge Cache' executed");
+        })
+        ->item("Quit", "application-exit-symbolic", "Ctrl+Q", [this]() {
+            log_activity("Header: 'Quit' triggered");
             if (m_engine) m_engine->quit();
         })
-        ->onKey([this](const KeyPressEvent& ev) {
-            handle_key(ev);
+        ->build();
+
+    header_dots_btn->set_on_click_listener([this, header_dots_btn]() {
+        m_header_menu->show_as_dropdown(header_dots_btn, PopupGravity::BottomEnd);
+    });
+
+    header->add_view(header_dots_btn);
+    root->add_view(header);
+
+    // Subtle divider
+    root->add_view(DividerViewBuilder::create()->thickness(1)->build());
+
+    // =========================================================================
+    // 3. Section 1: Item Cards with 3-Dot Overflow Menus
+    // =========================================================================
+    auto sec1_label = TextViewBuilder::create()
+        ->text("Item Cards with Contextual 3-Dot Overflow Menus")
+        ->textSize(13)
+        ->bold(true)
+        ->build();
+    root->add_view(sec1_label);
+
+    auto cards_row = std::make_shared<LinearLayout>(Orientation::Horizontal);
+    cards_row->set_layout_params(LayoutParams(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    ));
+    cards_row->set_divider_spacing(16);
+
+    // --- Card 1: Project Document ---
+    auto card1 = CardViewBuilder::create()
+        ->bordered(true)
+        ->cornerRadius(10)
+        ->padding(14, 12)
+        ->build();
+    LayoutParams c1_params(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    );
+    c1_params.weight = 1.0f;
+    card1->set_layout_params(c1_params);
+
+    auto card1_layout = std::make_shared<LinearLayout>(Orientation::Horizontal);
+    card1_layout->set_layout_params(LayoutParams(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    ));
+    card1_layout->set_gravity(Gravity::CenterVertical);
+
+    auto c1_text_col = std::make_shared<LinearLayout>(Orientation::Vertical);
+    LayoutParams c1_text_params(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    );
+    c1_text_params.weight = 1.0f;
+    c1_text_col->set_layout_params(c1_text_params);
+
+    auto c1_title = TextViewBuilder::create()
+        ->text("Q3_Financial_Plan.pdf")
+        ->textSize(13)
+        ->bold(true)
+        ->build();
+    c1_text_col->add_view(c1_title);
+
+    auto c1_sub = TextViewBuilder::create()
+        ->text("PDF • 3.2 MB • Modified 10m ago")
+        ->textSize(11)
+        ->muted(true)
+        ->build();
+    c1_text_col->add_view(c1_sub);
+    card1_layout->add_view(c1_text_col);
+
+    auto c1_dots_btn = std::make_shared<ImageButton>("view-more-symbolic");
+    c1_dots_btn->set_circle(true);
+    c1_dots_btn->set_icon_size(16);
+    c1_dots_btn->set_padding(6);
+    c1_dots_btn->set_layout_params(LayoutParams(
+        static_cast<int>(LayoutDimension::WrapContent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    ));
+
+    m_doc_menu = PopupMenuBuilder::create()
+        ->item("Open Document", "document-open-symbolic", [this]() {
+            log_activity("Card 1: 'Open Document' clicked");
+        })
+        ->item("Edit Properties", "document-edit-symbolic", [this]() {
+            log_activity("Card 1: 'Edit Properties' clicked");
+        })
+        ->item("Duplicate", "edit-copy-symbolic", "Ctrl+D", [this]() {
+            log_activity("Card 1: 'Duplicate' clicked");
+        })
+        ->separator()
+        ->checkable("Star as Favorite", true, [this](bool checked) {
+            log_activity(std::string("Card 1: Star Favorite -> ") + (checked ? "ON" : "OFF"));
+        })
+        ->checkable("Offline Sync", false, [this](bool checked) {
+            log_activity(std::string("Card 1: Offline Sync -> ") + (checked ? "ON" : "OFF"));
+        })
+        ->separator()
+        ->destructive("Move to Trash", "user-trash-symbolic", [this]() {
+            log_activity("Card 1 Destructive: 'Move to Trash' clicked");
+        })
+        ->build();
+
+    c1_dots_btn->set_on_click_listener([this, c1_dots_btn]() {
+        m_doc_menu->show_as_dropdown(c1_dots_btn, PopupGravity::BottomEnd);
+    });
+    card1_layout->add_view(c1_dots_btn);
+    card1->add_view(card1_layout);
+    cards_row->add_view(card1);
+
+    // --- Card 2: Backup Archive ---
+    auto card2 = CardViewBuilder::create()
+        ->bordered(true)
+        ->cornerRadius(10)
+        ->padding(14, 12)
+        ->build();
+    LayoutParams c2_params(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    );
+    c2_params.weight = 1.0f;
+    card2->set_layout_params(c2_params);
+
+    auto card2_layout = std::make_shared<LinearLayout>(Orientation::Horizontal);
+    card2_layout->set_layout_params(LayoutParams(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    ));
+    card2_layout->set_gravity(Gravity::CenterVertical);
+
+    auto c2_text_col = std::make_shared<LinearLayout>(Orientation::Vertical);
+    LayoutParams c2_text_params(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    );
+    c2_text_params.weight = 1.0f;
+    c2_text_col->set_layout_params(c2_text_params);
+
+    auto c2_title = TextViewBuilder::create()
+        ->text("system_backup_2026.tar.gz")
+        ->textSize(13)
+        ->bold(true)
+        ->build();
+    c2_text_col->add_view(c2_title);
+
+    auto c2_sub = TextViewBuilder::create()
+        ->text("Archive • 420 MB • Created today")
+        ->textSize(11)
+        ->muted(true)
+        ->build();
+    c2_text_col->add_view(c2_sub);
+    card2_layout->add_view(c2_text_col);
+
+    auto c2_dots_btn = std::make_shared<ImageButton>("view-more-symbolic");
+    c2_dots_btn->set_circle(true);
+    c2_dots_btn->set_icon_size(16);
+    c2_dots_btn->set_padding(6);
+    c2_dots_btn->set_layout_params(LayoutParams(
+        static_cast<int>(LayoutDimension::WrapContent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    ));
+
+    m_archive_menu = PopupMenuBuilder::create()
+        ->item("Extract Archive", "package-x-generic-symbolic", [this]() {
+            log_activity("Card 2: 'Extract Archive' clicked");
+        })
+        ->item("Verify Checksum", "dialog-information-symbolic", [this]() {
+            log_activity("Card 2: 'Verify Checksum' clicked");
+        })
+        ->item("Share File", "emblem-shared-symbolic", [this]() {
+            log_activity("Card 2: 'Share File' clicked");
+        })
+        ->separator()
+        ->destructive("Delete Permanently", "user-trash-symbolic", [this]() {
+            log_activity("Card 2 Destructive: 'Delete Permanently' clicked");
+        })
+        ->build();
+
+    c2_dots_btn->set_on_click_listener([this, c2_dots_btn]() {
+        m_archive_menu->show_as_dropdown(c2_dots_btn, PopupGravity::BottomEnd);
+    });
+    card2_layout->add_view(c2_dots_btn);
+    card2->add_view(card2_layout);
+    cards_row->add_view(card2);
+
+    root->add_view(cards_row);
+
+    // =========================================================================
+    // 4. Section 2: Dropdown Buttons & Multi-Axis Gravity Tests
+    // =========================================================================
+    auto sec2_label = TextViewBuilder::create()
+        ->text("Dropdown Menus & Multi-Axis Placement Gravity")
+        ->textSize(13)
+        ->bold(true)
+        ->build();
+    root->add_view(sec2_label);
+
+    auto btn_row = std::make_shared<LinearLayout>(Orientation::Horizontal);
+    btn_row->set_layout_params(LayoutParams(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    ));
+    btn_row->set_divider_spacing(12);
+
+    // Button 1: "Actions ▾" (Primary style, BottomStart gravity)
+    auto actions_btn = ButtonBuilder::create()
+        ->text("Actions ▾")
+        ->primary(true)
+        ->padding(14, 8)
+        ->cornerRadius(8)
+        ->build();
+
+    m_actions_menu = PopupMenuBuilder::create()
+        ->section("Quick Actions")
+        ->item("New Document", "document-new-symbolic", "Ctrl+N", [this]() {
+            log_activity("Actions Menu: 'New Document' clicked");
+        })
+        ->item("New Folder", "folder-new-symbolic", [this]() {
+            log_activity("Actions Menu: 'New Folder' clicked");
+        })
+        ->separator()
+        ->item("Import from Device...", "document-open-symbolic", [this]() {
+            log_activity("Actions Menu: 'Import' clicked");
+        })
+        ->item("Export All Projects...", "document-save-symbolic", [this]() {
+            log_activity("Actions Menu: 'Export All' clicked");
+        })
+        ->build();
+
+    actions_btn->set_on_click_listener([this, actions_btn]() {
+        m_actions_menu->show_as_dropdown(actions_btn, PopupGravity::BottomStart);
+    });
+    btn_row->add_view(actions_btn);
+
+    // Button 2: "Export As ▾" (Standard style, BottomEnd gravity)
+    auto export_btn = ButtonBuilder::create()
+        ->text("Export As ▾")
+        ->padding(14, 8)
+        ->cornerRadius(8)
+        ->build();
+
+    m_export_menu = PopupMenuBuilder::create()
+        ->item("Portable Document (.pdf)", "x-office-document-symbolic", [this]() {
+            log_activity("Export Menu: Selected PDF");
+        })
+        ->item("Vector Graphic (.svg)", "image-x-generic-symbolic", [this]() {
+            log_activity("Export Menu: Selected SVG");
+        })
+        ->item("Markdown (.md)", "text-x-generic-symbolic", [this]() {
+            log_activity("Export Menu: Selected Markdown");
+        })
+        ->separator()
+        ->checkable("High-Resolution 2x", true, [this](bool checked) {
+            log_activity(std::string("Export Menu: High-Res 2x -> ") + (checked ? "ON" : "OFF"));
+        })
+        ->build();
+
+    export_btn->set_on_click_listener([this, export_btn]() {
+        m_export_menu->show_as_dropdown(export_btn, PopupGravity::BottomEnd);
+    });
+    btn_row->add_view(export_btn);
+
+    // Button 3: "Popup Above ▴" (Outlined style, TopStart gravity)
+    auto above_btn = ButtonBuilder::create()
+        ->text("Popup Above ▴")
+        ->outlined(true)
+        ->padding(14, 8)
+        ->cornerRadius(8)
+        ->build();
+
+    m_above_menu = PopupMenuBuilder::create()
+        ->section("Top-Anchored Menu")
+        ->item("Gravity: TopStart", [this]() {
+            log_activity("Above Menu: TopStart item selected");
+        })
+        ->item("Flipped Upward", [this]() {
+            log_activity("Above Menu: Flipped Upward selected");
+        })
+        ->separator()
+        ->item("Auto-clamp Test", [this]() {
+            log_activity("Above Menu: Auto-clamp Test selected");
+        })
+        ->build();
+
+    above_btn->set_on_click_listener([this, above_btn]() {
+        m_above_menu->show_as_dropdown(above_btn, PopupGravity::TopStart);
+    });
+    btn_row->add_view(above_btn);
+
+    // Spinner: Dropdown Spinner (powered by PopupMenu under the hood)
+    m_test_spinner = SpinnerBuilder::create()
+        ->prompt("Select Theme")
+        ->items({"Dynamic Material You", "Nord Dark", "Catppuccin Mocha", "Solarized Light"})
+        ->cornerRadius(8)
+        ->padding(12, 8)
+        ->onItemSelected([this](int idx, const std::string& item) {
+            log_activity("Spinner Selection: [" + std::to_string(idx) + "] " + item);
+        })
+        ->build();
+    m_test_spinner->set_layout_params(LayoutParams(
+        180,
+        static_cast<int>(LayoutDimension::WrapContent)
+    ));
+    btn_row->add_view(m_test_spinner);
+
+    root->add_view(btn_row);
+
+    // =========================================================================
+    // 5. Section 3: Live Activity Console (Bottom Card)
+    // =========================================================================
+    auto console_card = CardViewBuilder::create()
+        ->bordered(true)
+        ->cornerRadius(10)
+        ->padding(16, 12)
+        ->build();
+    console_card->set_layout_params(LayoutParams(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    ));
+
+    auto console_layout = std::make_shared<LinearLayout>(Orientation::Vertical);
+    console_layout->set_layout_params(LayoutParams(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    ));
+    console_layout->set_divider_spacing(6);
+
+    auto console_header = std::make_shared<LinearLayout>(Orientation::Horizontal);
+    console_header->set_layout_params(LayoutParams(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    ));
+    console_header->set_gravity(Gravity::CenterVertical);
+
+    auto console_title = TextViewBuilder::create()
+        ->text("LIVE ACTIVITY CONSOLE")
+        ->textSize(11)
+        ->bold(true)
+        ->muted(true)
+        ->build();
+    LayoutParams c_title_params(
+        static_cast<int>(LayoutDimension::MatchParent),
+        static_cast<int>(LayoutDimension::WrapContent)
+    );
+    c_title_params.weight = 1.0f;
+    console_title->set_layout_params(c_title_params);
+    console_header->add_view(console_title);
+
+    auto clear_btn = ButtonBuilder::create()
+        ->text("Clear")
+        ->flat(true)
+        ->padding(8, 4)
+        ->textSize(11)
+        ->onClick([this]() {
+            if (m_status_text) {
+                m_status_text->set_text("[Console cleared]");
+            }
+            if (m_window) m_window->schedule_redraw();
+        })
+        ->build();
+    console_header->add_view(clear_btn);
+    console_layout->add_view(console_header);
+
+    m_status_text = TextViewBuilder::create()
+        ->text("Ready. Click any 3-dot overflow menu or dropdown button to test.")
+        ->textSize(12)
+        ->build();
+    console_layout->add_view(m_status_text);
+
+    console_card->add_view(console_layout);
+    root->add_view(console_card);
+
+    // =========================================================================
+    // 6. Build Window
+    // =========================================================================
+    m_window = WindowBuilder::create()
+        ->title("MiQuToolkit - Action Menu & Popup Showcase")
+        ->appId("miqutest")
+        ->role(WindowRole::Toplevel)
+        ->preferredSize(820, 560)
+        ->closeOnEscape(true)
+        ->contentView(root)
+        ->onClose([this]() {
+            if (m_engine) m_engine->quit();
         })
         ->build();
 
     if (m_window) {
         m_window->show();
     }
-}
-
-void TestApp::select_user(size_t index) {
-    if (index >= m_users.size()) return;
-    m_selected_user_idx = index;
-
-    if (m_users_grid) {
-        for (size_t i = 0; i < m_users.size(); ++i) {
-            auto item = m_users_grid->get_item_at(i);
-            if (auto card = std::dynamic_pointer_cast<UserCardView>(item)) {
-                card->set_selected(i == m_selected_user_idx);
-            }
-        }
-    }
-
-    if (m_password_input) {
-        m_password_input->clear();
-        m_password_input->set_focused(true);
-    }
-    if (m_status_label) {
-        m_status_label->set_text("");
-    }
-    if (m_window) {
-        m_window->schedule_redraw();
-    }
-}
-
-void TestApp::select_session(int index) {
-    if (index < 0 || index >= static_cast<int>(m_sessions.size())) return;
-    m_selected_session_idx = index;
-
-    if (m_status_label) {
-        m_status_label->set_text("");
-    }
-    if (m_window) {
-        m_window->schedule_redraw();
-    }
-}
-
-static void send_notification(const std::string& title, const std::string& message, const std::string& icon = "dialog-information") {
-    pid_t pid = fork();
-    if (pid == 0) {
-        execlp("notify-send", "notify-send", "-a", "miqudm", "-i", icon.c_str(), title.c_str(), message.c_str(), nullptr);
-        _exit(1);
-    }
-}
-
-void TestApp::attempt_login() {
-    if (m_users.empty() || m_sessions.empty()) return;
-
-    const auto& user = m_users[m_selected_user_idx];
-    const auto& session = m_sessions[m_selected_session_idx];
-    std::string password = m_password_input ? m_password_input->get_text() : "";
-
-    std::string notif_body = "Username: " + user.username + "\n"
-                           + "Session: " + session.name + (session.is_wayland ? " (Wayland)" : " (X11)") + "\n"
-                           + "Password: " + (password.empty() ? "(empty)" : password);
-
-    send_notification("miqudm - Sign In", notif_body, "system-lock-screen");
-
-    std::string msg = "Launching " + session.name + " for " + user.username;
-    if (m_status_label) {
-        m_status_label->set_text(msg);
-    }
-    if (m_window) {
-        m_window->schedule_redraw();
-    }
-    std::cout << "[miqudm-prototype] " << msg << std::endl;
-}
-
-void TestApp::handle_power_action(const std::string& action) {
-    std::string icon = "dialog-information";
-    if (action == "Suspend") icon = "system-suspend";
-    else if (action == "Reboot") icon = "system-reboot";
-    else if (action == "PowerOff") icon = "system-shutdown";
-
-    send_notification("miqudm - Power Action", "Action: " + action, icon);
-
-    std::string msg = "Power: " + action;
-    if (m_status_label) {
-        m_status_label->set_text(msg);
-    }
-    if (m_window) {
-        m_window->schedule_redraw();
-    }
-    std::cout << "[miqudm-prototype] " << msg << std::endl;
-}
-
-void TestApp::handle_key(const KeyPressEvent& ev) {
-    if (!ev.pressed) return;
-    if (ev.keysym == XKB_KEY_q && (ev.modifiers & static_cast<uint32_t>(KeyboardModifier::Control))) {
-        if (m_engine) m_engine->quit();
-    } else if (ev.keysym == XKB_KEY_Escape) {
-        if (m_engine) m_engine->quit();
-    }
-}
-
-int TestApp::run() {
-    if (!m_engine) return 1;
-    return m_engine->enter_loop();
 }
 
 } // namespace miqutest
